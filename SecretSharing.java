@@ -12,9 +12,6 @@ public class SecretSharing {
         Share(int x, BigInteger y) { this.x = x; this.y = y; }
     }
 
-    // Large prime for modular arithmetic (must be larger than any share value)
-    static final BigInteger MOD = new BigInteger("340282366920938463463374607431768211507"); // 128-bit prime
-
     // Parse shares from JSON
     static List<Share> parseShares(String json) {
         List<Share> shares = new ArrayList<>();
@@ -43,8 +40,18 @@ public class SecretSharing {
         throw new IllegalArgumentException("Invalid k format");
     }
 
-    // Reconstruct secret modulo MOD
-    static BigInteger reconstructModular(List<Share> shares, int k) {
+    // Find a prime larger than the largest share
+    static BigInteger findPrimeLargerThan(BigInteger maxShare) {
+        // Add some safety margin
+        BigInteger candidate = maxShare.add(BigInteger.valueOf(1000));
+        if (!candidate.isProbablePrime(100)) {
+            candidate = candidate.nextProbablePrime();
+        }
+        return candidate;
+    }
+
+    // Modular Lagrange interpolation
+    static BigInteger reconstructSecretMod(List<Share> shares, int k, BigInteger mod) {
         if (shares.size() < k)
             throw new IllegalArgumentException("Not enough shares");
         BigInteger sum = BigInteger.ZERO;
@@ -52,17 +59,17 @@ public class SecretSharing {
 
         for (int i = 0; i < k; i++) {
             Share si = pts.get(i);
-            BigInteger term = si.y.mod(MOD);
+            BigInteger term = si.y.mod(mod);
 
             for (int j = 0; j < k; j++) {
                 if (i == j) continue;
                 Share sj = pts.get(j);
-                BigInteger numerator = BigInteger.valueOf(-sj.x).mod(MOD);
-                BigInteger denominator = BigInteger.valueOf(si.x - sj.x).mod(MOD);
-                term = term.multiply(numerator.multiply(denominator.modInverse(MOD)).mod(MOD)).mod(MOD);
+                BigInteger numerator = BigInteger.valueOf(-sj.x).mod(mod);
+                BigInteger denominator = BigInteger.valueOf(si.x - sj.x).mod(mod);
+                term = term.multiply(numerator.multiply(denominator.modInverse(mod)).mod(mod)).mod(mod);
             }
 
-            sum = sum.add(term).mod(MOD);
+            sum = sum.add(term).mod(mod);
         }
 
         return sum;
@@ -79,8 +86,14 @@ public class SecretSharing {
                 String json = Files.readString(Paths.get(fname));
                 List<Share> shares = parseShares(json);
                 int k = parseK(json);
-                BigInteger secret = reconstructModular(shares, k);
+
+                // Find largest share
+                BigInteger maxShare = shares.stream().map(s -> s.y).max(BigInteger::compareTo).orElse(BigInteger.ONE);
+                BigInteger prime = findPrimeLargerThan(maxShare);
+
+                BigInteger secret = reconstructSecretMod(shares, k, prime);
                 System.out.println(fname + ": " + secret.toString());
+
             } catch (IOException ioe) {
                 System.err.println(fname + ": I/O error - " + ioe.getMessage());
             } catch (IllegalArgumentException | ArithmeticException ex) {
