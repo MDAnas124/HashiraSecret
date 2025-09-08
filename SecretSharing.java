@@ -12,29 +12,10 @@ public class SecretSharing {
         Share(int x, BigInteger y) { this.x = x; this.y = y; }
     }
 
-    static class Fraction {
-        BigInteger num, den;
-        Fraction(BigInteger n, BigInteger d) {
-            if (d.signum() == 0) throw new ArithmeticException("Denominator = 0");
-            if (d.signum() < 0) { n = n.negate(); d = d.negate(); }
-            BigInteger g = n.gcd(d);
-            num = n.divide(g);
-            den = d.divide(g);
-        }
-        static Fraction of(BigInteger n) { return new Fraction(n, BigInteger.ONE); }
-        Fraction add(Fraction o) {
-            return new Fraction(num.multiply(o.den).add(o.num.multiply(den)), den.multiply(o.den));
-        }
-        Fraction mul(Fraction o) {
-            return new Fraction(num.multiply(o.num), den.multiply(o.den));
-        }
-        BigInteger toBigIntegerExact() {
-            if (!den.equals(BigInteger.ONE))
-                throw new ArithmeticException("Result not an integer: " + num + "/" + den);
-            return num;
-        }
-    }
+    // Large prime for modular arithmetic (must be larger than any share value)
+    static final BigInteger MOD = new BigInteger("340282366920938463463374607431768211507"); // 128-bit prime
 
+    // Parse shares from JSON
     static List<Share> parseShares(String json) {
         List<Share> shares = new ArrayList<>();
         Pattern p = Pattern.compile(
@@ -52,35 +33,39 @@ public class SecretSharing {
         return shares;
     }
 
+    // Parse k from JSON
     static int parseK(String json) {
         int idx = json.indexOf("\"k\"");
         if (idx == -1) throw new IllegalArgumentException("Missing k in JSON");
         String sub = json.substring(idx, Math.min(idx + 50, json.length()));
         Matcher mk = Pattern.compile(":\\s*(\\d+)").matcher(sub);
-        if (mk.find()) {
-            return Integer.parseInt(mk.group(1));
-        }
+        if (mk.find()) return Integer.parseInt(mk.group(1));
         throw new IllegalArgumentException("Invalid k format");
     }
 
-    static BigInteger reconstructC(List<Share> shares, int k) {
+    // Reconstruct secret modulo MOD
+    static BigInteger reconstructModular(List<Share> shares, int k) {
         if (shares.size() < k)
-            throw new IllegalArgumentException("Not enough shares: have " + shares.size() + " need " + k);
-        Fraction sum = Fraction.of(BigInteger.ZERO);
+            throw new IllegalArgumentException("Not enough shares");
+        BigInteger sum = BigInteger.ZERO;
         List<Share> pts = shares.subList(0, k);
+
         for (int i = 0; i < k; i++) {
             Share si = pts.get(i);
-            Fraction term = Fraction.of(si.y);
+            BigInteger term = si.y.mod(MOD);
+
             for (int j = 0; j < k; j++) {
                 if (i == j) continue;
                 Share sj = pts.get(j);
-                term = term.mul(new Fraction(
-                        BigInteger.valueOf(-sj.x),
-                        BigInteger.valueOf(si.x - sj.x)));
+                BigInteger numerator = BigInteger.valueOf(-sj.x).mod(MOD);
+                BigInteger denominator = BigInteger.valueOf(si.x - sj.x).mod(MOD);
+                term = term.multiply(numerator.multiply(denominator.modInverse(MOD)).mod(MOD)).mod(MOD);
             }
-            sum = sum.add(term);
+
+            sum = sum.add(term).mod(MOD);
         }
-        return sum.toBigIntegerExact();
+
+        return sum;
     }
 
     public static void main(String[] args) {
@@ -94,7 +79,7 @@ public class SecretSharing {
                 String json = Files.readString(Paths.get(fname));
                 List<Share> shares = parseShares(json);
                 int k = parseK(json);
-                BigInteger secret = reconstructC(shares, k);
+                BigInteger secret = reconstructModular(shares, k);
                 System.out.println(fname + ": " + secret.toString());
             } catch (IOException ioe) {
                 System.err.println(fname + ": I/O error - " + ioe.getMessage());
